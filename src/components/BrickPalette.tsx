@@ -3,14 +3,20 @@
 import { useState, useMemo } from 'react';
 import { Search, X, Grid3x3, ChevronDown, ChevronUp } from 'lucide-react';
 import { BRICKS } from '@/data/bricks';
+import { Brick } from '@/types/brick';
 import BrickThumbnail from './BrickThumbnail';
 
 interface BrickPaletteProps {
   className?: string;
   onBrickSelect?: (brickId: string) => void;
+  onBrickDragStart?: (brick: Brick, event: React.MouseEvent | React.TouchEvent) => void;
 }
 
-export default function BrickPalette({ className = '', onBrickSelect }: BrickPaletteProps) {
+export default function BrickPalette({ 
+  className = '', 
+  onBrickSelect,
+  onBrickDragStart 
+}: BrickPaletteProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [isExpanded, setIsExpanded] = useState(true);
 
@@ -99,6 +105,7 @@ export default function BrickPalette({ className = '', onBrickSelect }: BrickPal
                   key={brick.id}
                   brick={brick}
                   onClick={() => onBrickSelect?.(brick.id)}
+                  onDragStart={(brick, event) => onBrickDragStart?.(brick, event)}
                 />
               ))}
             </div>

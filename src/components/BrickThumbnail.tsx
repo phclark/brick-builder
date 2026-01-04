@@ -5,9 +5,10 @@ import { Brick } from '@/types/brick';
 interface BrickThumbnailProps {
   brick: Brick;
   onClick?: () => void;
+  onDragStart?: (brick: Brick, event: React.MouseEvent | React.TouchEvent) => void;
 }
 
-export default function BrickThumbnail({ brick, onClick }: BrickThumbnailProps) {
+export default function BrickThumbnail({ brick, onClick, onDragStart }: BrickThumbnailProps) {
   const { dimensions, color, name } = brick;
 
   // Calculate aspect ratio for visual representation
@@ -22,10 +23,26 @@ export default function BrickThumbnail({ brick, onClick }: BrickThumbnailProps) 
   const visualWidth = width + depth * 0.5;
   const visualHeight = height + depth * 0.3;
 
+  const handleMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (onDragStart) {
+      onDragStart(brick, e);
+    }
+  };
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    e.preventDefault();
+    if (onDragStart) {
+      onDragStart(brick, e);
+    }
+  };
+
   return (
     <button
       onClick={onClick}
-      className="group relative flex flex-col items-center gap-2 p-3 rounded-lg border-2 border-slate-200 bg-white hover:border-orange-400 hover:shadow-lg transition-all duration-200 cursor-pointer w-full"
+      onMouseDown={handleMouseDown}
+      onTouchStart={handleTouchStart}
+      className="group relative flex flex-col items-center gap-2 p-3 rounded-lg border-2 border-slate-200 bg-white hover:border-orange-400 hover:shadow-lg transition-all duration-200 cursor-grab active:cursor-grabbing w-full"
       title={brick.description}
     >
       {/* Brick visual representation */}
