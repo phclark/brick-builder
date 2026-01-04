@@ -37,6 +37,30 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
   const fpsFramesRef = useRef<number[]>([]);
   const lastFrameTimeRef = useRef<number>(0);
 
+  const updateGhostBrickPosition = useCallback((clientX: number, clientY: number) => {
+    if (!containerRef.current || !cameraRef.current || !ghostBrickRef.current || !draggedBrick) return;
+    
+    const rect = containerRef.current.getBoundingClientRect();
+    const mouse = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1
+    );
+    
+    raycasterRef.current.setFromCamera(mouse, cameraRef.current);
+    
+    const intersectPoint = new THREE.Vector3();
+    raycasterRef.current.ray.intersectPlane(planeRef.current, intersectPoint);
+    
+    if (intersectPoint) {
+      // Snap to grid
+      intersectPoint.x = snapToGrid(intersectPoint.x, 1);
+      intersectPoint.z = snapToGrid(intersectPoint.z, 1);
+      intersectPoint.y = draggedBrick.dimensions.height / 2;
+      
+      ghostBrickRef.current.position.copy(intersectPoint);
+    }
+  }, [draggedBrick]);
+
   // Expose methods to parent component
   useImperativeHandle(ref, () => ({
     startDrag: (brick: Brick, clientX: number, clientY: number) => {
@@ -105,34 +129,12 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
       setIsDragging(false);
       setDraggedBrick(null);
     },
-  }));
-
-  const updateGhostBrickPosition = useCallback((clientX: number, clientY: number) => {
-    if (!containerRef.current || !cameraRef.current || !ghostBrickRef.current || !draggedBrick) return;
-    
-    const rect = containerRef.current.getBoundingClientRect();
-    const mouse = new THREE.Vector2(
-      ((clientX - rect.left) / rect.width) * 2 - 1,
-      -((clientY - rect.top) / rect.height) * 2 + 1
-    );
-    
-    raycasterRef.current.setFromCamera(mouse, cameraRef.current);
-    
-    const intersectPoint = new THREE.Vector3();
-    raycasterRef.current.ray.intersectPlane(planeRef.current, intersectPoint);
-    
-    if (intersectPoint) {
-      // Snap to grid
-      intersectPoint.x = snapToGrid(intersectPoint.x, 1);
-      intersectPoint.z = snapToGrid(intersectPoint.z, 1);
-      intersectPoint.y = draggedBrick.dimensions.height / 2;
-      
-      ghostBrickRef.current.position.copy(intersectPoint);
-    }
-  }, [draggedBrick]);
+  }), [isDragging, draggedBrick, updateGhostBrickPosition]);
 
   useEffect(() => {
     if (!containerRef.current) return;
+
+    const container = containerRef.current;
 
     // Scene setup
     const scene = new THREE.Scene();
@@ -142,7 +144,7 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
     // Camera setup
     const camera = new THREE.PerspectiveCamera(
       75,
-      containerRef.current.clientWidth / containerRef.current.clientHeight,
+      container.clientWidth / container.clientHeight,
       0.1,
       1000
     );
@@ -158,7 +160,7 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
       stencil: false,
       depth: true,
     });
-    renderer.setSize(containerRef.current.clientWidth, containerRef.current.clientHeight);
+    renderer.setSize(container.clientWidth, container.clientHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Cap at 2x for performance
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Soft shadows
@@ -167,7 +169,7 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
     renderer.toneMappingExposure = 1.0;
     rendererRef.current = renderer;
 
-    containerRef.current.appendChild(renderer.domElement);
+    container.appendChild(renderer.domElement);
 
     // Orbit Controls setup
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -271,10 +273,10 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
 
     // Handle window resize
     const handleResize = () => {
-      if (!containerRef.current || !cameraRef.current || !rendererRef.current) return;
+      if (!container || !cameraRef.current || !rendererRef.current) return;
 
-      const width = containerRef.current.clientWidth;
-      const height = containerRef.current.clientHeight;
+      const width = container.clientWidth;
+      const height = container.clientHeight;
 
       cameraRef.current.aspect = width / height;
       cameraRef.current.updateProjectionMatrix();
@@ -298,8 +300,8 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
 
       if (rendererRef.current) {
         rendererRef.current.dispose();
-        if (containerRef.current && rendererRef.current.domElement) {
-          containerRef.current.removeChild(rendererRef.current.domElement);
+        if (container && rendererRef.current.domElement) {
+          container.removeChild(rendererRef.current.domElement);
         }
       }
 

@@ -8,18 +8,15 @@ import { Menu, X } from 'lucide-react';
 
 export default function Home() {
   const [isPaletteOpen, setIsPaletteOpen] = useState(true);
-  const [selectedBrickId, setSelectedBrickId] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const sceneRef = useRef<Scene3DHandle>(null);
 
   const handleBrickSelect = (brickId: string) => {
-    setSelectedBrickId(brickId);
     console.log('Selected brick:', brickId);
   };
 
   const handleBrickDragStart = useCallback((brick: Brick, event: React.MouseEvent | React.TouchEvent) => {
     setIsDragging(true);
-    setSelectedBrickId(brick.id);
     
     const clientX = 'touches' in event ? event.touches[0].clientX : event.clientX;
     const clientY = 'touches' in event ? event.touches[0].clientY : event.clientY;
