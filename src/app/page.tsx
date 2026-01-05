@@ -1,24 +1,68 @@
 'use client';
 
-import { useState } from 'react';
-import Scene3D from "@/components/Scene3D";
+import { useState, useRef, useCallback } from 'react';
+import Scene3D, { Scene3DHandle } from "@/components/Scene3D";
 import BrickPalette from "@/components/BrickPalette";
-import { Menu, X } from 'lucide-react';
+import { Brick } from '@/types/brick';
+import { Menu, X, Move } from 'lucide-react';
 
 export default function Home() {
   const [isPaletteOpen, setIsPaletteOpen] = useState(true);
-  const [selectedBrickId, setSelectedBrickId] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const sceneRef = useRef<Scene3DHandle>(null);
 
   const handleBrickSelect = (brickId: string) => {
-    setSelectedBrickId(brickId);
     console.log('Selected brick:', brickId);
-    // TODO: Add brick to 3D scene
   };
 
+  const handleBrickDragStart = useCallback((brick: Brick, event: React.MouseEvent | React.TouchEvent) => {
+    setIsDragging(true);
+    
+    const clientX = 'touches' in event ? event.touches[0].clientX : event.clientX;
+    const clientY = 'touches' in event ? event.touches[0].clientY : event.clientY;
+    
+    if (sceneRef.current) {
+      sceneRef.current.startDrag(brick, clientX, clientY);
+    }
+  }, []);
+
+  const handleMouseMove = useCallback((event: React.MouseEvent) => {
+    if (isDragging && sceneRef.current) {
+      sceneRef.current.updateDrag(event.clientX, event.clientY);
+    }
+  }, [isDragging]);
+
+  const handleTouchMove = useCallback((event: React.TouchEvent) => {
+    if (isDragging && sceneRef.current && event.touches.length > 0) {
+      event.preventDefault();
+      sceneRef.current.updateDrag(event.touches[0].clientX, event.touches[0].clientY);
+    }
+  }, [isDragging]);
+
+  const handleMouseUp = useCallback(() => {
+    if (isDragging && sceneRef.current) {
+      sceneRef.current.endDrag();
+      setIsDragging(false);
+    }
+  }, [isDragging]);
+
+  const handleTouchEnd = useCallback(() => {
+    if (isDragging && sceneRef.current) {
+      sceneRef.current.endDrag();
+      setIsDragging(false);
+    }
+  }, [isDragging]);
+
   return (
-    <div className="w-screen h-screen overflow-hidden bg-slate-50 relative">
+    <div 
+      className="w-screen h-screen overflow-hidden bg-slate-50 relative"
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+    >
       {/* 3D Scene */}
-      <Scene3D className="w-full h-full" />
+      <Scene3D ref={sceneRef} className="w-full h-full" />
       
       {/* Header Overlay */}
       <div className="absolute top-0 left-0 right-0 p-4 md:p-6 pointer-events-none z-10">
@@ -59,6 +103,7 @@ export default function Home() {
         <BrickPalette
           className="h-full"
           onBrickSelect={handleBrickSelect}
+          onBrickDragStart={handleBrickDragStart}
         />
       </div>
 
@@ -70,11 +115,28 @@ export default function Home() {
         />
       )}
 
-      {/* Selected Brick Indicator (for testing) */}
-      {selectedBrickId && (
-        <div className="absolute bottom-4 left-4 bg-white/90 backdrop-blur-sm px-4 py-2 rounded-lg shadow-lg border border-slate-200 pointer-events-none z-10">
-          <p className="text-xs text-slate-600">Selected:</p>
-          <p className="text-sm font-semibold text-slate-900">{selectedBrickId}</p>
+      {/* Drag Cursor Overlay with Visual Feedback */}
+      {isDragging && (
+        <div 
+          className="absolute inset-0 pointer-events-none z-30" 
+          style={{ cursor: 'grabbing' }}
+        >
+          {/* Additional visual indicator for active drag state */}
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-20">
+            <Move className="w-16 h-16 text-orange-500 animate-pulse" />
+          </div>
+        </div>
+      )}
+
+      {/* Instructions Overlay - Only show when no bricks placed yet */}
+      {!isDragging && (
+        <div className="absolute bottom-20 left-1/2 -translate-x-1/2 pointer-events-none z-10">
+          <div className="bg-gradient-to-r from-orange-500 to-cyan-500 text-white px-6 py-3 rounded-full shadow-lg backdrop-blur-sm">
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <Move className="w-4 h-4" />
+              <span>Drag bricks from the palette to start building!</span>
+            </div>
+          </div>
         </div>
       )}
     </div>
