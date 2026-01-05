@@ -16,4 +16,5 @@ export interface PlacedBrick {
     z: number;
   };
   rotation: number;
+  isSelected?: boolean;
 }

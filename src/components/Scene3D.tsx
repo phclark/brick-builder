@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Brick } from '@/types/brick';
 import { PlacedBrick } from '@/types/drag';
-import { createBrickMesh, snapToGrid, findStackingHeight, getBricksBelow } from '@/utils/brickHelpers';
+import { createBrickMesh, snapToGrid, findStackingHeight, getBricksBelow, getBrickById } from '@/utils/brickHelpers';
 
 interface Scene3DProps {
   className?: string;
@@ -29,15 +29,217 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
   const ghostBrickRef = useRef<THREE.Group | null>(null);
   const dropIndicatorRef = useRef<THREE.Mesh | null>(null);
   const placedBricksRef = useRef<Map<string, THREE.Group>>(new Map());
+  const selectionOutlineRef = useRef<THREE.LineSegments | null>(null);
+  const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null);
   
   const [fps, setFps] = useState<number>(60);
   const [isDragging, setIsDragging] = useState(false);
   const [draggedBrick, setDraggedBrick] = useState<Brick | null>(null);
   const [placedBricks, setPlacedBricks] = useState<PlacedBrick[]>([]);
-  const [stackingOn, setStackingOn] = useState<number>(0); // Number of bricks being stacked on
+  const [selectedBrickId, setSelectedBrickId] = useState<string | null>(null);
+  const [isMovingBrick, setIsMovingBrick] = useState(false);
+  const [stackingOn, setStackingOn] = useState<number>(0);
   
   const fpsFramesRef = useRef<number[]>([]);
   const lastFrameTimeRef = useRef<number>(0);
+
+  // Helper function to create selection outline
+  const createSelectionOutline = useCallback((group: THREE.Group): THREE.LineSegments => {
+    const box = new THREE.Box3().setFromObject(group);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    
+    const geometry = new THREE.EdgesGeometry(
+      new THREE.BoxGeometry(size.x * 1.1, size.y * 1.1, size.z * 1.1)
+    );
+    const material = new THREE.LineBasicMaterial({
+      color: 0xf97316, // Orange highlight
+      linewidth: 3,
+      transparent: true,
+      opacity: 1.0,
+    });
+    const outline = new THREE.LineSegments(geometry, material);
+    outline.position.copy(center);
+    
+    return outline;
+  }, []);
+
+  // Update selection outline
+  const updateSelectionOutline = useCallback(() => {
+    if (selectionOutlineRef.current && sceneRef.current) {
+      sceneRef.current.remove(selectionOutlineRef.current);
+      selectionOutlineRef.current.geometry.dispose();
+      (selectionOutlineRef.current.material as THREE.Material).dispose();
+      selectionOutlineRef.current = null;
+    }
+
+    if (selectedBrickId && sceneRef.current) {
+      const brickGroup = placedBricksRef.current.get(selectedBrickId);
+      if (brickGroup) {
+        const outline = createSelectionOutline(brickGroup);
+        sceneRef.current.add(outline);
+        selectionOutlineRef.current = outline;
+      }
+    }
+  }, [selectedBrickId, createSelectionOutline]);
+
+  // Handle mousedown on brick (for starting drag on selected bricks)
+  const handleMouseDown = useCallback((event: MouseEvent) => {
+    if (!containerRef.current || !cameraRef.current || isDragging || isMovingBrick) return;
+
+    const rect = containerRef.current.getBoundingClientRect();
+    mouseDownPosRef.current = { x: event.clientX, y: event.clientY };
+  }, [isDragging, isMovingBrick]);
+
+  // Handle brick selection or drag initiation via click
+  const handleMouseUp = useCallback((event: MouseEvent) => {
+    if (!containerRef.current || !cameraRef.current || isDragging || isMovingBrick) return;
+    if (!mouseDownPosRef.current) return;
+
+    // Check if this was a click (not a drag)
+    const dx = Math.abs(event.clientX - mouseDownPosRef.current.x);
+    const dy = Math.abs(event.clientY - mouseDownPosRef.current.y);
+    
+    if (dx > 5 || dy > 5) {
+      // This was a drag for camera, not a click
+      mouseDownPosRef.current = null;
+      return;
+    }
+
+    const rect = containerRef.current.getBoundingClientRect();
+    const mouse = new THREE.Vector2(
+      ((event.clientX - rect.left) / rect.width) * 2 - 1,
+      -((event.clientY - rect.top) / rect.height) * 2 + 1
+    );
+
+    raycasterRef.current.setFromCamera(mouse, cameraRef.current);
+    
+    // Check intersections with placed bricks
+    const brickMeshes: THREE.Object3D[] = [];
+    placedBricksRef.current.forEach((group) => {
+      group.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          brickMeshes.push(child);
+        }
+      });
+    });
+
+    const intersects = raycasterRef.current.intersectObjects(brickMeshes, false);
+    
+    if (intersects.length > 0) {
+      // Find which brick was clicked
+      const clickedMesh = intersects[0].object;
+      for (const [brickId, group] of placedBricksRef.current.entries()) {
+        let found = false;
+        group.traverse((child) => {
+          if (child === clickedMesh) {
+            found = true;
+          }
+        });
+        if (found) {
+          // If clicking the already selected brick with shift, start moving it
+          if (brickId === selectedBrickId && event.shiftKey) {
+            startMovingBrick();
+          } else {
+            setSelectedBrickId(brickId);
+            setPlacedBricks(prev => prev.map(b => ({
+              ...b,
+              isSelected: b.id === brickId
+            })));
+          }
+          mouseDownPosRef.current = null;
+          return;
+        }
+      }
+    } else {
+      // Clicked on empty space, deselect
+      setSelectedBrickId(null);
+      setPlacedBricks(prev => prev.map(b => ({ ...b, isSelected: false })));
+    }
+    
+    mouseDownPosRef.current = null;
+  }, [isDragging, isMovingBrick, selectedBrickId]);
+
+  // Handle keyboard events for rotation and deletion
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!selectedBrickId) return;
+
+      // Delete key removes selected brick
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        event.preventDefault();
+        const brickGroup = placedBricksRef.current.get(selectedBrickId);
+        if (brickGroup && sceneRef.current) {
+          sceneRef.current.remove(brickGroup);
+          placedBricksRef.current.delete(selectedBrickId);
+          setPlacedBricks(prev => prev.filter(b => b.id !== selectedBrickId));
+          setSelectedBrickId(null);
+        }
+        return;
+      }
+
+      // R key rotates brick 90 degrees
+      if (event.key === 'r' || event.key === 'R') {
+        event.preventDefault();
+        const brickGroup = placedBricksRef.current.get(selectedBrickId);
+        if (brickGroup) {
+          brickGroup.rotation.y += Math.PI / 2;
+          setPlacedBricks(prev => prev.map(b => 
+            b.id === selectedBrickId 
+              ? { ...b, rotation: (b.rotation + 90) % 360 }
+              : b
+          ));
+        }
+      }
+
+      // M key or double-click moves brick
+      if (event.key === 'm' || event.key === 'M') {
+        event.preventDefault();
+        startMovingBrick();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedBrickId]);
+
+  // Handle moving selected brick
+  const startMovingBrick = useCallback(() => {
+    if (!selectedBrickId) return;
+    
+    const placedBrick = placedBricks.find(b => b.id === selectedBrickId);
+    const brick = placedBrick ? getBrickById(placedBrick.brickId) : null;
+    
+    if (!brick || !placedBrick) return;
+
+    setIsMovingBrick(true);
+    setDraggedBrick(brick);
+    
+    // Remove the brick temporarily
+    const brickGroup = placedBricksRef.current.get(selectedBrickId);
+    if (brickGroup && sceneRef.current) {
+      sceneRef.current.remove(brickGroup);
+    }
+    
+    // Disable orbit controls
+    if (controlsRef.current) {
+      controlsRef.current.enabled = false;
+    }
+    
+    // Create ghost brick
+    const ghostBrick = createBrickMesh(brick, true);
+    ghostBrick.position.set(
+      placedBrick.position.x,
+      placedBrick.position.y,
+      placedBrick.position.z
+    );
+    ghostBrick.rotation.y = (placedBrick.rotation * Math.PI) / 180;
+    
+    if (sceneRef.current) {
+      sceneRef.current.add(ghostBrick);
+      ghostBrickRef.current = ghostBrick;
+    }
+  }, [selectedBrickId, placedBricks]);
 
   const updateGhostBrickPosition = useCallback((clientX: number, clientY: number) => {
     if (!containerRef.current || !cameraRef.current || !ghostBrickRef.current || !draggedBrick) return;
@@ -54,44 +256,43 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
     raycasterRef.current.ray.intersectPlane(planeRef.current, intersectPoint);
     
     if (intersectPoint) {
-      // Snap to grid in XZ plane
       const snappedX = snapToGrid(intersectPoint.x, 1);
       const snappedZ = snapToGrid(intersectPoint.z, 1);
       
-      // Calculate stacking height based on collision detection
+      // Filter out the currently moving brick when calculating stacking
+      const otherBricks = isMovingBrick 
+        ? placedBricks.filter(b => b.id !== selectedBrickId)
+        : placedBricks;
+      
       const stackingY = findStackingHeight(
         { x: snappedX, z: snappedZ },
         { width: draggedBrick.dimensions.width, depth: draggedBrick.dimensions.depth },
-        placedBricks,
+        otherBricks,
         draggedBrick.dimensions.height
       );
       
-      // Update stacking indicator
       const bricksBelow = getBricksBelow(
         { x: snappedX, z: snappedZ },
         { width: draggedBrick.dimensions.width, depth: draggedBrick.dimensions.depth },
-        placedBricks
+        otherBricks
       );
       setStackingOn(bricksBelow.length);
       
-      // Update ghost brick position with stacking
       ghostBrickRef.current.position.set(snappedX, stackingY, snappedZ);
       
-      // Update drop indicator
       if (dropIndicatorRef.current) {
         dropIndicatorRef.current.position.set(snappedX, 0.01, snappedZ);
         dropIndicatorRef.current.visible = true;
         
-        // Change indicator color based on stacking
         const material = dropIndicatorRef.current.material as THREE.MeshBasicMaterial;
         if (bricksBelow.length > 0) {
-          material.color.setHex(0x06b6d4); // Cyan for stacking
+          material.color.setHex(0x06b6d4);
         } else {
-          material.color.setHex(0x10b981); // Green for ground placement
+          material.color.setHex(0x10b981);
         }
       }
     }
-  }, [draggedBrick, placedBricks]);
+  }, [draggedBrick, placedBricks, isMovingBrick, selectedBrickId]);
 
   // Expose methods to parent component
   useImperativeHandle(ref, () => ({
@@ -101,17 +302,15 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
       setIsDragging(true);
       setDraggedBrick(brick);
       setStackingOn(0);
+      setSelectedBrickId(null); // Deselect when dragging new brick
       
-      // Disable orbit controls during drag
       if (controlsRef.current) {
         controlsRef.current.enabled = false;
       }
       
-      // Create ghost brick with enhanced visual feedback
       const ghostBrick = createBrickMesh(brick, true);
       ghostBrick.position.y = brick.dimensions.height / 2;
       
-      // Add pulsing animation effect to ghost brick
       ghostBrick.traverse((child) => {
         if (child instanceof THREE.Mesh && child.material) {
           const material = child.material as THREE.MeshStandardMaterial;
@@ -123,7 +322,6 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
       sceneRef.current.add(ghostBrick);
       ghostBrickRef.current = ghostBrick;
       
-      // Create drop indicator (circular outline on ground)
       if (!dropIndicatorRef.current) {
         const indicatorGeometry = new THREE.RingGeometry(
           Math.max(brick.dimensions.width, brick.dimensions.depth) * 0.6,
@@ -131,7 +329,7 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
           32
         );
         const indicatorMaterial = new THREE.MeshBasicMaterial({
-          color: 0x10b981, // Green for valid drop zone
+          color: 0x10b981,
           side: THREE.DoubleSide,
           transparent: true,
           opacity: 0.6,
@@ -140,7 +338,6 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
         dropIndicatorRef.current.rotation.x = -Math.PI / 2;
         sceneRef.current.add(dropIndicatorRef.current);
       } else {
-        // Update indicator size for current brick
         const newGeometry = new THREE.RingGeometry(
           Math.max(brick.dimensions.width, brick.dimensions.depth) * 0.6,
           Math.max(brick.dimensions.width, brick.dimensions.depth) * 0.7,
@@ -151,62 +348,98 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
         dropIndicatorRef.current.visible = true;
       }
       
-      // Update initial position
       updateGhostBrickPosition(clientX, clientY);
     },
     
     updateDrag: (clientX: number, clientY: number) => {
-      if (!isDragging || !ghostBrickRef.current) return;
+      if (!isDragging && !isMovingBrick) return;
+      if (!ghostBrickRef.current) return;
       updateGhostBrickPosition(clientX, clientY);
     },
     
     endDrag: () => {
-      if (!isDragging || !ghostBrickRef.current || !draggedBrick || !sceneRef.current) return;
+      if ((!isDragging && !isMovingBrick) || !ghostBrickRef.current || !draggedBrick || !sceneRef.current) return;
       
-      // Place the brick at the ghost position (already calculated with collision detection)
       const position = {
         x: ghostBrickRef.current.position.x,
         y: ghostBrickRef.current.position.y,
         z: ghostBrickRef.current.position.z,
       };
       
-      // Remove ghost brick
+      const rotation = ghostBrickRef.current.rotation.y;
+      
       sceneRef.current.remove(ghostBrickRef.current);
       ghostBrickRef.current = null;
       
-      // Hide drop indicator
       if (dropIndicatorRef.current) {
         dropIndicatorRef.current.visible = false;
       }
       
-      // Create permanent brick
       const permanentBrick = createBrickMesh(draggedBrick, false);
       permanentBrick.position.set(position.x, position.y, position.z);
+      permanentBrick.rotation.y = rotation;
       sceneRef.current.add(permanentBrick);
       
-      // Store placed brick
-      const placedBrickId = `brick-${Date.now()}-${Math.random()}`;
-      placedBricksRef.current.set(placedBrickId, permanentBrick);
+      let placedBrickId: string;
       
-      const newPlacedBrick: PlacedBrick = {
-        id: placedBrickId,
-        brickId: draggedBrick.id,
-        position,
-        rotation: 0,
-      };
+      if (isMovingBrick && selectedBrickId) {
+        // Update existing brick
+        placedBrickId = selectedBrickId;
+        placedBricksRef.current.set(placedBrickId, permanentBrick);
+        
+        setPlacedBricks(prev => prev.map(b => 
+          b.id === placedBrickId
+            ? { ...b, position, rotation: (rotation * 180) / Math.PI, isSelected: true }
+            : b
+        ));
+      } else {
+        // Create new brick
+        placedBrickId = `brick-${Date.now()}-${Math.random()}`;
+        placedBricksRef.current.set(placedBrickId, permanentBrick);
+        
+        const newPlacedBrick: PlacedBrick = {
+          id: placedBrickId,
+          brickId: draggedBrick.id,
+          position,
+          rotation: (rotation * 180) / Math.PI,
+          isSelected: false,
+        };
+        
+        setPlacedBricks(prev => [...prev, newPlacedBrick]);
+      }
       
-      setPlacedBricks(prev => [...prev, newPlacedBrick]);
-      
-      // Re-enable orbit controls
       if (controlsRef.current) {
         controlsRef.current.enabled = true;
       }
       
       setIsDragging(false);
+      setIsMovingBrick(false);
       setDraggedBrick(null);
       setStackingOn(0);
+      
+      if (isMovingBrick) {
+        setSelectedBrickId(placedBrickId);
+      }
     },
-  }), [isDragging, draggedBrick, updateGhostBrickPosition, placedBricks]);
+  }), [isDragging, isMovingBrick, draggedBrick, updateGhostBrickPosition, placedBricks, selectedBrickId]);
+
+  // Update selection outline when selection changes
+  useEffect(() => {
+    updateSelectionOutline();
+  }, [selectedBrickId, updateSelectionOutline]);
+
+  // Attach mouse handlers to canvas
+  useEffect(() => {
+    const canvas = rendererRef.current?.domElement;
+    if (!canvas) return;
+
+    canvas.addEventListener('mousedown', handleMouseDown);
+    canvas.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      canvas.removeEventListener('mousedown', handleMouseDown);
+      canvas.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [handleMouseDown, handleMouseUp]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -215,7 +448,7 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
 
     // Scene setup
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xf8fafc); // Slate-50 background
+    scene.background = new THREE.Color(0xf8fafc);
     sceneRef.current = scene;
 
     // Camera setup
@@ -229,7 +462,7 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
     camera.lookAt(0, 0, 0);
     cameraRef.current = camera;
 
-    // Renderer setup with performance optimizations
+    // Renderer setup
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
       alpha: false,
@@ -238,9 +471,9 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
       depth: true,
     });
     renderer.setSize(container.clientWidth, container.clientHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Cap at 2x for performance
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Soft shadows
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
@@ -248,13 +481,13 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
 
     container.appendChild(renderer.domElement);
 
-    // Orbit Controls setup
+    // Orbit Controls
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true; // Smooth camera movements
+    controls.enableDamping = true;
     controls.dampingFactor = 0.05;
     controls.minDistance = 5;
     controls.maxDistance = 50;
-    controls.maxPolarAngle = Math.PI / 2; // Prevent camera going below ground
+    controls.maxPolarAngle = Math.PI / 2;
     controls.enablePan = true;
     controls.panSpeed = 0.8;
     controls.rotateSpeed = 0.8;
@@ -262,17 +495,13 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
     controls.target.set(0, 0, 0);
     controlsRef.current = controls;
 
-    // Lighting setup
-    // Ambient light for overall scene illumination
+    // Lighting
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
     scene.add(ambientLight);
 
-    // Directional light for sun-like illumination with shadows
     const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
     directionalLight.position.set(10, 20, 10);
     directionalLight.castShadow = true;
-    
-    // Shadow camera optimization
     directionalLight.shadow.camera.left = -20;
     directionalLight.shadow.camera.right = 20;
     directionalLight.shadow.camera.top = 20;
@@ -284,25 +513,15 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
     directionalLight.shadow.bias = -0.0001;
     scene.add(directionalLight);
 
-    // Hemisphere light for sky/ground ambient lighting
-    const hemisphereLight = new THREE.HemisphereLight(
-      0x87ceeb, // Sky color (light blue)
-      0x8b7355, // Ground color (brown)
-      0.3
-    );
+    const hemisphereLight = new THREE.HemisphereLight(0x87ceeb, 0x8b7355, 0.3);
     scene.add(hemisphereLight);
 
-    // Grid floor for spatial reference
-    const gridHelper = new THREE.GridHelper(
-      40, // Size
-      40, // Divisions
-      0xf97316, // Center line color (orange - primary color)
-      0x94a3b8  // Grid color (slate-400)
-    );
+    // Grid floor
+    const gridHelper = new THREE.GridHelper(40, 40, 0xf97316, 0x94a3b8);
     gridHelper.position.y = 0;
     scene.add(gridHelper);
 
-    // Floor plane to receive shadows
+    // Floor plane
     const floorGeometry = new THREE.PlaneGeometry(40, 40);
     const floorMaterial = new THREE.ShadowMaterial({ opacity: 0.3 });
     const floor = new THREE.Mesh(floorGeometry, floorMaterial);
@@ -311,7 +530,7 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
     floor.receiveShadow = true;
     scene.add(floor);
 
-    // Animation loop with FPS tracking
+    // Animation loop
     const animate = (currentTime: number) => {
       animationFrameRef.current = requestAnimationFrame(animate);
 
@@ -321,12 +540,10 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
         const currentFps = 1000 / delta;
         fpsFramesRef.current.push(currentFps);
         
-        // Keep last 60 frames for average
         if (fpsFramesRef.current.length > 60) {
           fpsFramesRef.current.shift();
         }
 
-        // Update FPS display every 30 frames
         if (fpsFramesRef.current.length === 60) {
           const avgFps = fpsFramesRef.current.reduce((a, b) => a + b, 0) / fpsFramesRef.current.length;
           setFps(Math.round(avgFps));
@@ -335,23 +552,28 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
       }
       lastFrameTimeRef.current = currentTime;
 
-      // Animate ghost brick (subtle pulsing effect)
+      // Animate ghost brick
       if (ghostBrickRef.current) {
         const pulse = Math.sin(currentTime * 0.003) * 0.1 + 0.9;
         ghostBrickRef.current.scale.set(pulse, pulse, pulse);
       }
 
-      // Animate drop indicator (rotating)
+      // Animate drop indicator
       if (dropIndicatorRef.current && dropIndicatorRef.current.visible) {
         dropIndicatorRef.current.rotation.z += 0.02;
       }
 
-      // Update controls
+      // Animate selection outline
+      if (selectionOutlineRef.current) {
+        const pulse = Math.sin(currentTime * 0.005) * 0.2 + 0.8;
+        const material = selectionOutlineRef.current.material as THREE.LineBasicMaterial;
+        material.opacity = pulse;
+      }
+
       if (controlsRef.current) {
         controlsRef.current.update();
       }
 
-      // Render scene
       if (rendererRef.current && sceneRef.current && cameraRef.current) {
         rendererRef.current.render(sceneRef.current, cameraRef.current);
       }
@@ -423,17 +645,32 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
       </div>
 
       {/* Drag Indicator */}
-      {isDragging && (
+      {(isDragging || isMovingBrick) && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-orange-500/90 text-white px-4 py-2 rounded-lg font-sans text-sm backdrop-blur-sm shadow-lg animate-pulse">
           <div className="flex items-center gap-2">
             <span className="text-2xl">🎯</span>
             <div className="flex flex-col">
-              <span className="font-semibold">Placing: {draggedBrick?.name}</span>
+              <span className="font-semibold">{isMovingBrick ? 'Moving' : 'Placing'}: {draggedBrick?.name}</span>
               {stackingOn > 0 && (
                 <span className="text-xs text-orange-100">
                   Stacking on {stackingOn} brick{stackingOn !== 1 ? 's' : ''}
                 </span>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Selection Info */}
+      {selectedBrickId && !isDragging && !isMovingBrick && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-orange-500/90 text-white px-4 py-2 rounded-lg font-sans text-sm backdrop-blur-sm shadow-lg">
+          <div className="flex items-center gap-3">
+            <span className="text-xl">🔸</span>
+            <div className="flex flex-col">
+              <span className="font-semibold">Brick Selected</span>
+              <span className="text-xs text-orange-100">
+                M to move • R to rotate • Delete to remove
+              </span>
             </div>
           </div>
         </div>
@@ -446,7 +683,10 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
             <span className="text-orange-400 font-semibold">🖱️ Controls:</span>
           </div>
           <div className="text-slate-300 text-xs space-y-0.5">
-            <div>• Drag brick from palette</div>
+            <div>• Click brick to select</div>
+            <div>• M: Move selected brick</div>
+            <div>• R: Rotate selected brick</div>
+            <div>• Delete: Remove selected</div>
             <div>• Left Click + Drag: Orbit</div>
             <div>• Right Click + Drag: Pan</div>
             <div>• Scroll: Zoom</div>
