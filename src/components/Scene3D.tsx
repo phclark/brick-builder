@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Brick } from '@/types/brick';
 import { PlacedBrick } from '@/types/drag';
-import { createBrickMesh, snapToGrid } from '@/utils/brickHelpers';
+import { createBrickMesh, snapToGrid, findStackingHeight, getBricksBelow } from '@/utils/brickHelpers';
 
 interface Scene3DProps {
   className?: string;
@@ -34,6 +34,7 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
   const [isDragging, setIsDragging] = useState(false);
   const [draggedBrick, setDraggedBrick] = useState<Brick | null>(null);
   const [placedBricks, setPlacedBricks] = useState<PlacedBrick[]>([]);
+  const [stackingOn, setStackingOn] = useState<number>(0); // Number of bricks being stacked on
   
   const fpsFramesRef = useRef<number[]>([]);
   const lastFrameTimeRef = useRef<number>(0);
@@ -53,20 +54,44 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
     raycasterRef.current.ray.intersectPlane(planeRef.current, intersectPoint);
     
     if (intersectPoint) {
-      // Snap to grid
-      intersectPoint.x = snapToGrid(intersectPoint.x, 1);
-      intersectPoint.z = snapToGrid(intersectPoint.z, 1);
-      intersectPoint.y = draggedBrick.dimensions.height / 2;
+      // Snap to grid in XZ plane
+      const snappedX = snapToGrid(intersectPoint.x, 1);
+      const snappedZ = snapToGrid(intersectPoint.z, 1);
       
-      ghostBrickRef.current.position.copy(intersectPoint);
+      // Calculate stacking height based on collision detection
+      const stackingY = findStackingHeight(
+        { x: snappedX, z: snappedZ },
+        { width: draggedBrick.dimensions.width, depth: draggedBrick.dimensions.depth },
+        placedBricks,
+        draggedBrick.dimensions.height
+      );
+      
+      // Update stacking indicator
+      const bricksBelow = getBricksBelow(
+        { x: snappedX, z: snappedZ },
+        { width: draggedBrick.dimensions.width, depth: draggedBrick.dimensions.depth },
+        placedBricks
+      );
+      setStackingOn(bricksBelow.length);
+      
+      // Update ghost brick position with stacking
+      ghostBrickRef.current.position.set(snappedX, stackingY, snappedZ);
       
       // Update drop indicator
       if (dropIndicatorRef.current) {
-        dropIndicatorRef.current.position.set(intersectPoint.x, 0.01, intersectPoint.z);
+        dropIndicatorRef.current.position.set(snappedX, 0.01, snappedZ);
         dropIndicatorRef.current.visible = true;
+        
+        // Change indicator color based on stacking
+        const material = dropIndicatorRef.current.material as THREE.MeshBasicMaterial;
+        if (bricksBelow.length > 0) {
+          material.color.setHex(0x06b6d4); // Cyan for stacking
+        } else {
+          material.color.setHex(0x10b981); // Green for ground placement
+        }
       }
     }
-  }, [draggedBrick]);
+  }, [draggedBrick, placedBricks]);
 
   // Expose methods to parent component
   useImperativeHandle(ref, () => ({
@@ -75,6 +100,7 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
       
       setIsDragging(true);
       setDraggedBrick(brick);
+      setStackingOn(0);
       
       // Disable orbit controls during drag
       if (controlsRef.current) {
@@ -137,7 +163,7 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
     endDrag: () => {
       if (!isDragging || !ghostBrickRef.current || !draggedBrick || !sceneRef.current) return;
       
-      // Place the brick at the ghost position
+      // Place the brick at the ghost position (already calculated with collision detection)
       const position = {
         x: ghostBrickRef.current.position.x,
         y: ghostBrickRef.current.position.y,
@@ -178,8 +204,9 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
       
       setIsDragging(false);
       setDraggedBrick(null);
+      setStackingOn(0);
     },
-  }), [isDragging, draggedBrick, updateGhostBrickPosition]);
+  }), [isDragging, draggedBrick, updateGhostBrickPosition, placedBricks]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -400,7 +427,14 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
         <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-orange-500/90 text-white px-4 py-2 rounded-lg font-sans text-sm backdrop-blur-sm shadow-lg animate-pulse">
           <div className="flex items-center gap-2">
             <span className="text-2xl">🎯</span>
-            <span className="font-semibold">Placing: {draggedBrick?.name}</span>
+            <div className="flex flex-col">
+              <span className="font-semibold">Placing: {draggedBrick?.name}</span>
+              {stackingOn > 0 && (
+                <span className="text-xs text-orange-100">
+                  Stacking on {stackingOn} brick{stackingOn !== 1 ? 's' : ''}
+                </span>
+              )}
+            </div>
           </div>
         </div>
       )}
