@@ -18,7 +18,7 @@ export interface Scene3DHandle {
 }
 
 const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref) => {
-  const containerRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -35,9 +35,32 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
   const [draggedBrick, setDraggedBrick] = useState<Brick | null>(null);
   const [placedBricks, setPlacedBricks] = useState<PlacedBrick[]>([]);
   const [stackingOn, setStackingOn] = useState<number>(0); // Number of bricks being stacked on
+  const [currentRotation, setCurrentRotation] = useState<number>(0); // Current rotation in degrees (0, 90, 180, 270)
   
   const fpsFramesRef = useRef<number[]>([]);
   const lastFrameTimeRef = useRef<number>(0);
+
+  // Handle spacebar rotation during drag
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.code === 'Space' && isDragging && ghostBrickRef.current) {
+        event.preventDefault(); // Prevent page scroll
+        
+        // Rotate by 90 degrees
+        const newRotation = (currentRotation + 90) % 360;
+        setCurrentRotation(newRotation);
+        
+        // Apply rotation to ghost brick
+        const rotationRadians = (newRotation * Math.PI) / 180;
+        ghostBrickRef.current.rotation.y = rotationRadians;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isDragging, currentRotation]);
 
   const updateGhostBrickPosition = useCallback((clientX: number, clientY: number) => {
     if (!containerRef.current || !cameraRef.current || !ghostBrickRef.current || !draggedBrick) return;
@@ -58,10 +81,19 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
       const snappedX = snapToGrid(intersectPoint.x, 1);
       const snappedZ = snapToGrid(intersectPoint.z, 1);
       
-      // Calculate stacking height based on collision detection
+      // Get effective dimensions based on rotation
+      // At 90 and 270 degrees, swap width and depth
+      const effectiveWidth = (currentRotation === 90 || currentRotation === 270) 
+        ? draggedBrick.dimensions.depth 
+        : draggedBrick.dimensions.width;
+      const effectiveDepth = (currentRotation === 90 || currentRotation === 270) 
+        ? draggedBrick.dimensions.width 
+        : draggedBrick.dimensions.depth;
+      
+      // Calculate stacking height based on collision detection with rotated dimensions
       const stackingY = findStackingHeight(
         { x: snappedX, z: snappedZ },
-        { width: draggedBrick.dimensions.width, depth: draggedBrick.dimensions.depth },
+        { width: effectiveWidth, depth: effectiveDepth },
         placedBricks,
         draggedBrick.dimensions.height
       );
@@ -69,7 +101,7 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
       // Update stacking indicator
       const bricksBelow = getBricksBelow(
         { x: snappedX, z: snappedZ },
-        { width: draggedBrick.dimensions.width, depth: draggedBrick.dimensions.depth },
+        { width: effectiveWidth, depth: effectiveDepth },
         placedBricks
       );
       setStackingOn(bricksBelow.length);
@@ -91,7 +123,7 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
         }
       }
     }
-  }, [draggedBrick, placedBricks]);
+  }, [draggedBrick, placedBricks, currentRotation]);
 
   // Expose methods to parent component
   useImperativeHandle(ref, () => ({
@@ -101,6 +133,7 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
       setIsDragging(true);
       setDraggedBrick(brick);
       setStackingOn(0);
+      setCurrentRotation(0); // Reset rotation for new brick
       
       // Disable orbit controls during drag
       if (controlsRef.current) {
@@ -179,9 +212,14 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
         dropIndicatorRef.current.visible = false;
       }
       
-      // Create permanent brick
+      // Create permanent brick with rotation
       const permanentBrick = createBrickMesh(draggedBrick, false);
       permanentBrick.position.set(position.x, position.y, position.z);
+      
+      // Apply the current rotation
+      const rotationRadians = (currentRotation * Math.PI) / 180;
+      permanentBrick.rotation.y = rotationRadians;
+      
       sceneRef.current.add(permanentBrick);
       
       // Store placed brick
@@ -192,7 +230,7 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
         id: placedBrickId,
         brickId: draggedBrick.id,
         position,
-        rotation: 0,
+        rotation: currentRotation,
       };
       
       setPlacedBricks(prev => [...prev, newPlacedBrick]);
@@ -205,8 +243,9 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
       setIsDragging(false);
       setDraggedBrick(null);
       setStackingOn(0);
+      setCurrentRotation(0); // Reset rotation
     },
-  }), [isDragging, draggedBrick, updateGhostBrickPosition, placedBricks]);
+  }), [isDragging, draggedBrick, updateGhostBrickPosition, placedBricks, currentRotation]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -429,12 +468,29 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
             <span className="text-2xl">🎯</span>
             <div className="flex flex-col">
               <span className="font-semibold">Placing: {draggedBrick?.name}</span>
-              {stackingOn > 0 && (
-                <span className="text-xs text-orange-100">
-                  Stacking on {stackingOn} brick{stackingOn !== 1 ? 's' : ''}
-                </span>
-              )}
+              <div className="flex items-center gap-2 text-xs text-orange-100">
+                {stackingOn > 0 && (
+                  <span>
+                    Stacking on {stackingOn} brick{stackingOn !== 1 ? 's' : ''}
+                  </span>
+                )}
+                {currentRotation > 0 && (
+                  <span className="text-cyan-200">
+                    • Rotated {currentRotation}°
+                  </span>
+                )}
+              </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rotation Hint */}
+      {isDragging && (
+        <div className="absolute top-20 left-1/2 -translate-x-1/2 bg-cyan-500/90 text-white px-4 py-2 rounded-lg font-sans text-xs backdrop-blur-sm shadow-lg">
+          <div className="flex items-center gap-2">
+            <span className="text-lg">🔄</span>
+            <span>Press <kbd className="bg-white/20 px-2 py-1 rounded">SPACE</kbd> to rotate</span>
           </div>
         </div>
       )}
@@ -447,6 +503,7 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
           </div>
           <div className="text-slate-300 text-xs space-y-0.5">
             <div>• Drag brick from palette</div>
+            <div>• <kbd className="bg-white/10 px-1 rounded text-[10px]">SPACE</kbd> to rotate while dragging</div>
             <div>• Left Click + Drag: Orbit</div>
             <div>• Right Click + Drag: Pan</div>
             <div>• Scroll: Zoom</div>

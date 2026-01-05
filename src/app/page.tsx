@@ -4,7 +4,7 @@ import { useState, useRef, useCallback } from 'react';
 import Scene3D, { Scene3DHandle } from "@/components/Scene3D";
 import BrickPalette from "@/components/BrickPalette";
 import { Brick } from '@/types/brick';
-import { Menu, X, Move } from 'lucide-react';
+import { Menu, X, Move, RotateCw } from 'lucide-react';
 
 export default function Home() {
   const [isPaletteOpen, setIsPaletteOpen] = useState(true);
@@ -132,9 +132,10 @@ export default function Home() {
       {!isDragging && (
         <div className="absolute bottom-20 left-1/2 -translate-x-1/2 pointer-events-none z-10">
           <div className="bg-gradient-to-r from-orange-500 to-cyan-500 text-white px-6 py-3 rounded-full shadow-lg backdrop-blur-sm">
-            <div className="flex items-center gap-2 text-sm font-semibold">
+            <div className="flex items-center gap-3 text-sm font-semibold">
               <Move className="w-4 h-4" />
               <span>Drag bricks from the palette to start building!</span>
+              <RotateCw className="w-4 h-4" />
             </div>
           </div>
         </div>
