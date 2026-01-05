@@ -27,6 +27,7 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
   const raycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
   const planeRef = useRef<THREE.Plane>(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0));
   const ghostBrickRef = useRef<THREE.Group | null>(null);
+  const dropIndicatorRef = useRef<THREE.Mesh | null>(null);
   const placedBricksRef = useRef<Map<string, THREE.Group>>(new Map());
   
   const [fps, setFps] = useState<number>(60);
@@ -58,6 +59,12 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
       intersectPoint.y = draggedBrick.dimensions.height / 2;
       
       ghostBrickRef.current.position.copy(intersectPoint);
+      
+      // Update drop indicator
+      if (dropIndicatorRef.current) {
+        dropIndicatorRef.current.position.set(intersectPoint.x, 0.01, intersectPoint.z);
+        dropIndicatorRef.current.visible = true;
+      }
     }
   }, [draggedBrick]);
 
@@ -74,11 +81,49 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
         controlsRef.current.enabled = false;
       }
       
-      // Create ghost brick
+      // Create ghost brick with enhanced visual feedback
       const ghostBrick = createBrickMesh(brick, true);
-      ghostBrick.position.y = brick.dimensions.height / 2; // Position above ground
+      ghostBrick.position.y = brick.dimensions.height / 2;
+      
+      // Add pulsing animation effect to ghost brick
+      ghostBrick.traverse((child) => {
+        if (child instanceof THREE.Mesh && child.material) {
+          const material = child.material as THREE.MeshStandardMaterial;
+          material.emissive = new THREE.Color(brick.color);
+          material.emissiveIntensity = 0.3;
+        }
+      });
+      
       sceneRef.current.add(ghostBrick);
       ghostBrickRef.current = ghostBrick;
+      
+      // Create drop indicator (circular outline on ground)
+      if (!dropIndicatorRef.current) {
+        const indicatorGeometry = new THREE.RingGeometry(
+          Math.max(brick.dimensions.width, brick.dimensions.depth) * 0.6,
+          Math.max(brick.dimensions.width, brick.dimensions.depth) * 0.7,
+          32
+        );
+        const indicatorMaterial = new THREE.MeshBasicMaterial({
+          color: 0x10b981, // Green for valid drop zone
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.6,
+        });
+        dropIndicatorRef.current = new THREE.Mesh(indicatorGeometry, indicatorMaterial);
+        dropIndicatorRef.current.rotation.x = -Math.PI / 2;
+        sceneRef.current.add(dropIndicatorRef.current);
+      } else {
+        // Update indicator size for current brick
+        const newGeometry = new THREE.RingGeometry(
+          Math.max(brick.dimensions.width, brick.dimensions.depth) * 0.6,
+          Math.max(brick.dimensions.width, brick.dimensions.depth) * 0.7,
+          32
+        );
+        dropIndicatorRef.current.geometry.dispose();
+        dropIndicatorRef.current.geometry = newGeometry;
+        dropIndicatorRef.current.visible = true;
+      }
       
       // Update initial position
       updateGhostBrickPosition(clientX, clientY);
@@ -102,6 +147,11 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
       // Remove ghost brick
       sceneRef.current.remove(ghostBrickRef.current);
       ghostBrickRef.current = null;
+      
+      // Hide drop indicator
+      if (dropIndicatorRef.current) {
+        dropIndicatorRef.current.visible = false;
+      }
       
       // Create permanent brick
       const permanentBrick = createBrickMesh(draggedBrick, false);
@@ -258,6 +308,17 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
       }
       lastFrameTimeRef.current = currentTime;
 
+      // Animate ghost brick (subtle pulsing effect)
+      if (ghostBrickRef.current) {
+        const pulse = Math.sin(currentTime * 0.003) * 0.1 + 0.9;
+        ghostBrickRef.current.scale.set(pulse, pulse, pulse);
+      }
+
+      // Animate drop indicator (rotating)
+      if (dropIndicatorRef.current && dropIndicatorRef.current.visible) {
+        dropIndicatorRef.current.rotation.z += 0.02;
+      }
+
       // Update controls
       if (controlsRef.current) {
         controlsRef.current.update();
@@ -336,9 +397,10 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ className = '' }, ref
 
       {/* Drag Indicator */}
       {isDragging && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-orange-500/90 text-white px-4 py-2 rounded-lg font-sans text-sm backdrop-blur-sm shadow-lg">
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-orange-500/90 text-white px-4 py-2 rounded-lg font-sans text-sm backdrop-blur-sm shadow-lg animate-pulse">
           <div className="flex items-center gap-2">
-            <span className="font-semibold">🎯 Placing: {draggedBrick?.name}</span>
+            <span className="text-2xl">🎯</span>
+            <span className="font-semibold">Placing: {draggedBrick?.name}</span>
           </div>
         </div>
       )}

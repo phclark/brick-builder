@@ -4,7 +4,7 @@ import { useState, useRef, useCallback } from 'react';
 import Scene3D, { Scene3DHandle } from "@/components/Scene3D";
 import BrickPalette from "@/components/BrickPalette";
 import { Brick } from '@/types/brick';
-import { Menu, X } from 'lucide-react';
+import { Menu, X, Move } from 'lucide-react';
 
 export default function Home() {
   const [isPaletteOpen, setIsPaletteOpen] = useState(true);
@@ -115,9 +115,29 @@ export default function Home() {
         />
       )}
 
-      {/* Drag Cursor Overlay */}
+      {/* Drag Cursor Overlay with Visual Feedback */}
       {isDragging && (
-        <div className="absolute inset-0 pointer-events-none z-30" style={{ cursor: 'grabbing' }} />
+        <div 
+          className="absolute inset-0 pointer-events-none z-30" 
+          style={{ cursor: 'grabbing' }}
+        >
+          {/* Additional visual indicator for active drag state */}
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-20">
+            <Move className="w-16 h-16 text-orange-500 animate-pulse" />
+          </div>
+        </div>
+      )}
+
+      {/* Instructions Overlay - Only show when no bricks placed yet */}
+      {!isDragging && (
+        <div className="absolute bottom-20 left-1/2 -translate-x-1/2 pointer-events-none z-10">
+          <div className="bg-gradient-to-r from-orange-500 to-cyan-500 text-white px-6 py-3 rounded-full shadow-lg backdrop-blur-sm">
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <Move className="w-4 h-4" />
+              <span>Drag bricks from the palette to start building!</span>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
